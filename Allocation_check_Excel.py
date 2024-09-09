@@ -22,7 +22,8 @@ from multiprocessing import Queue, current_process, get_context
 import argparse
 import traceback
 import logging
-
+from openpyxl import load_workbook
+from openpyxl.styles import Font
 
 output_queue = queue.Queue()
 
@@ -261,7 +262,8 @@ def allocate_machines(outsource_df, components_df, machines_df, Similarity_df,in
         work_end = time(17, 0)
 
         # Current time for the example
-        current_time = datetime.now()
+        current_time=simulated_time
+        #current_time = datetime.now()
         remaining_time_minutes = 0
         dates = []  # List to store the calculated dates
 
@@ -460,7 +462,8 @@ def allocate_machines(outsource_df, components_df, machines_df, Similarity_df,in
                             # Calculate wait time and update it
                             wait_time = simulated_time - ReadyTime
                             #print(wait_time)
-                            wait_time_str = f"{wait_time.seconds // 3600:02}:{(wait_time.seconds // 60) % 60:02}:{wait_time.seconds % 60:02}"
+                            #wait_time_str = f"{wait_time.seconds // 3600:02}:{(wait_time.seconds // 60) % 60:02}:{wait_time.seconds % 60:02}"
+                            wait_time_str = f"{wait_time.seconds // 3600:02}:{(wait_time.seconds // 60) % 60:02}"
                             components_df.loc[index, 'Wait Time'] = wait_time_str  # Update only time
                             
                             machine_status[machine_number] = 1
@@ -488,7 +491,7 @@ def allocate_machines(outsource_df, components_df, machines_df, Similarity_df,in
                             # Update the last processed product details
                             #last_processed[machine_number] = (component, machine_number, operation, ProductNames)
                             last_processed[machine_number] = (component, machine_number, operation, ProductNames, end_time)
-                            #simulated_time += timedelta(minutes=Run_time_r)  # Update simulated time
+                            simulated_time += timedelta(minutes=Run_time_r)  # Update simulated time
                             machine_status[machine_number] = 0
                             #end_time = simulated_time
                             
@@ -616,16 +619,51 @@ def main():
         components_df['Idle Time'] = total_time - components_df['Time Diff_days']
 
         # Format Idle Time to %H:%M:%S
-        components_df['Idle Time'] = components_df['Idle Time'].dt.strftime('%H:%M:%S')
+        components_df['Idle Time'] = components_df['Idle Time'].dt.strftime('%H:%M')
+        
         print(components_df)
         #update_excel(components_df,connection)
         # Format 'Time Diff' to %H:%M:%S
-        components_df['Time Diff'] = components_df['Time Diff_days'].dt.total_seconds().apply(lambda x: pd.Timedelta(seconds=x)).dt.floor('s').astype(str)
-        components_df['Time Diff'] = components_df['Time Diff'].apply(lambda x: str(x).split(' ')[-1])
+        #components_df['Time Diff'] = components_df['Time Diff_days'].dt.total_seconds().apply(lambda x: pd.Timedelta(seconds=x)).dt.floor('s').astype(str)
+        #components_df['Time Diff'] = components_df['Time Diff'].apply(lambda x: str(x).split(' ')[-1])
+        # Step 1: Convert the time difference from timedelta to total seconds
+        components_df['Time Diff'] = components_df['Time Diff_days'].dt.total_seconds()
+
+        # Step 2: Convert total seconds to hours and minutes format '%H:%M'
+        components_df['Time Diff'] = components_df['Time Diff'].apply(lambda x: pd.to_datetime(x, unit='s').strftime('%H:%M'))
+
+        components_df['Promised Delivery Date'] = components_df['Promised Delivery Date'].dt.strftime('%Y-%m-%d %H:%M')
+        components_df['Order Processing Date'] = components_df['Order Processing Date'].dt.strftime('%Y-%m-%d %H:%M')
+        components_df['Start Time'] = components_df['Start Time'].dt.strftime('%Y-%m-%d %H:%M')
+        components_df['End Time'] = components_df['End Time'].dt.strftime('%Y-%m-%d %H:%M')
         
+        
+
         write_excel(components_df, file_path, 'prodet')
         write_excel(time_df_sorted, file_path, 'Product Times')
         
+
+        wb = load_workbook(file_path)
+        ws = wb['prodet']  # Assuming you want to apply formatting on this sheet
+
+        # Define red font style for highlighting
+        red_font = Font(color="FF0000", bold=True)
+
+        # Iterate over the rows in the DataFrame
+        components_df = pd.read_excel(file_path, sheet_name='prodet')
+
+        # Read the sheet where "Status" is located, and apply the red font if status is "Late"
+        for row_idx, row in components_df.iterrows():
+            status = row['Status']  # Assuming 'Status' column holds the status
+            if status == "Late":
+                # Highlight entire row (columns A to Z, or adjust as needed)
+                excel_row = row_idx + 2  # Adding 2 because row indices in openpyxl are 1-based, and row 1 is usually the header
+                for col in range(1, 27):  # Columns A (1) to Z (26)
+                    ws.cell(row=excel_row, column=col).font = red_font
+
+        # Save the workbook with the applied font style
+        wb.save(file_path)
+
 
 if __name__ == "__main__":
     main()

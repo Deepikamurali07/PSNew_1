@@ -245,7 +245,7 @@ def launch_dashboard():
     app.config.suppress_callback_exceptions = True
     # Define layout
     app.layout = dbc.Container(
-        
+       
         style={'textAlign': 'left', 'width': '100%', 'margin': 'auto'},
         children=[
             html.Div(style={'height': '50px'}),
@@ -324,6 +324,13 @@ def launch_dashboard():
                 ],
                 id="reset-modal",
                 is_open=False,
+            ),
+            html.Div(id='completion-message', style={'textAlign': 'left', 'fontSize': '20px', 'marginTop': '20px', 'marginBottom': '20px', 'fontWeight': 'bold'}),
+
+            dcc.Interval(
+                id='interval-component-data',
+                interval=5000,  # Time in milliseconds
+                n_intervals=0
             ),
 
             dcc.Tabs(id='tabs', value='tab-input', children=[
@@ -897,9 +904,34 @@ def launch_dashboard():
         ])
 
 
-            ], style={'width': '100%','marginTop': '50px', 'marginBottom': '50px'})
+            ], style={'width': '100%','marginTop': '50px', 'marginBottom': '50px'}),
+        
         ]
     )
+
+    # Callback to update the completion message
+    @app.callback(
+        Output('completion-message', 'children'),
+        Input('interval-component-data', 'n_intervals')  # Trigger callback periodically
+    )
+    def update_completion_message(n_intervals):
+        full_file_path=r'Product Details_v2.xlsx'
+
+        df1 = fetch_data_from_excel(full_file_path, 'prodet')
+        # Check if 'Status' column exists
+        if 'Status' not in df1.columns:
+            return "Status column missing in data."
+
+        # Check unique statuses
+        statuses = set(df1['Status'].dropna())
+        print("Statuses found:", statuses)  # For debugging
+
+        statuses = set(df1['Status'])
+        if statuses.issubset({'Completed', 'Late'}):
+            return "All Products are completed Processing"
+        else:
+            return "Some Products are not yet completed"
+        
     @app.callback(
     Output('conversion-result', 'children'),
     Input('convert-button', 'n_clicks'),
@@ -1957,6 +1989,7 @@ def launch_dashboard():
 
             for product_name, product_group in df.groupby('Product Name'):
                 total_delay = timedelta(0)  # Initialize total delay for each product
+                delay_count = 0  # Counter to track how many delays exist
                 last_end_time = None
 
                 for index, row in product_group.iterrows():
@@ -1969,7 +2002,12 @@ def launch_dashboard():
                             'Start Time': setup_start,
                             'End Time': row['Start Time'],
                             'Machine Number': '',  # Remove machine number for setup time
-                            'Is Setup': True
+                            'Is Setup': True,
+                            'Is Late': False,
+                            'Delay Days': 0,   # No delay for setup
+                            'Delay Hours': 0,  # No delay for setup
+                            'Hover Start Time': '',  # Empty string for hover
+                            'Hover End Time': ''  # Empty string for hover
                         })
 
                     # Adjust end time based on the process type of the next row
@@ -1980,26 +2018,41 @@ def launch_dashboard():
                         'Start Time': row['Start Time'],
                         'End Time': new_end,
                         'Machine Number': row['Machine Number'],
-                        'Is Setup': False
+                        'Is Setup': False,
+                        'Is Late': False,
+                        'Delay Days': 0,   # No delay for process components
+                        'Delay Hours': 0,  # No delay for process components
+                        'Hover Start Time': row['Start Time'].strftime('%d-%b %H:%M') if pd.notnull(row['Start Time']) else '',
+                        'Hover End Time': new_end.strftime('%d-%b %H:%M') if pd.notnull(new_end) else ''
                     })
 
                     last_end_time = row['End Time']  # Update last end time
+
                     # Accumulate delay times
                     if pd.notnull(row['Delay Days']) and (row['Delay Days'] > 0 or row['Delay Hours'] > 0):
                         total_delay += timedelta(days=row['Delay Days'], hours=row['Delay Hours'])
+                        delay_count += 1  # Track how many delays
 
-                # Add a single delay block for the total delay at the end of the last component
-                if total_delay > timedelta(0):
+                # Add a single delay block for the average delay at the end of the last component
+                if delay_count > 0:
+                    average_delay = total_delay / delay_count  # Calculate average delay
+                    delay_days = average_delay.days
+                    delay_hours = average_delay.seconds // 3600  # Convert seconds to hours
                     delay_start = last_end_time
-                    delay_end = delay_start + total_delay
+                    delay_end = delay_start + average_delay
 
                     plot_data.append({
                         'Product Name': product_name,
-                        'Components': 'Total Delay',  # Label for the total delay time
+                        'Components': 'Late',  # Change label from Total Delay to Late
                         'Start Time': delay_start,
                         'End Time': delay_end,
-                        'Machine Number': '',  # No machine number for total delay
-                        'Is Setup': False
+                        'Machine Number': row['Machine Number'],  # Display the machine number for the delay
+                        'Is Setup': False,
+                        'Is Late': True,  # Indicate that this is a delay block
+                        'Delay Days': delay_days,
+                        'Delay Hours': delay_hours,
+                        'Hover Start Time': '',  # Empty string for hover
+                        'Hover End Time': ''
                     })
 
             plot_df = pd.DataFrame(plot_data)
@@ -2013,7 +2066,7 @@ def launch_dashboard():
                 "C4": 'gold',
                 "C5": 'orchid',
                 "Setup Time": 'black',  # General color for setup times
-                "Total Delay": 'red'  # Color for total delay blocks
+                "Late": 'red'  # Change color for Late blocks
             }
 
             # Create the Gantt chart
@@ -2025,12 +2078,22 @@ def launch_dashboard():
                 color='Components',
                 title='Real-Time 2D Gantt Chart',
                 labels={'Components': 'Component'},
-                hover_data={
-                    'Machine Number': True,
-                    'Start Time': False,  # Hide the original 'Start Time'
-                    'End Time': False     # Hide the original 'End Time'
-                },
-                color_discrete_map=color_discrete_map
+                color_discrete_map=color_discrete_map,
+                custom_data=['Product Name', 'Components', 'Machine Number', 'Hover Start Time', 'Hover End Time', 'Delay Days', 'Delay Hours']
+            )
+
+            # Define hovertemplate with conditional display
+            fig.update_traces(
+                hovertemplate=(
+                    "Product Name: %{customdata[0]}<br>"
+                    "Component: %{customdata[1]}<br>"
+                    "Machine Number: %{customdata[2]}<br>"
+                    "Start Time: %{customdata[3]}<br>"
+                    "End Time: %{customdata[4]}<br>"
+                    "Delay Days: %{customdata[5]}<br>"
+                    "Delay Hours: %{customdata[6]}<br>"
+                    "<extra></extra>"
+                )
             )
 
             # Update layout to include both date and time on the x-axis
